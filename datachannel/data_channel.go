@@ -7,15 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"io"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 // DataChannel is the interface definition for handling communication with the AWS SSM messaging service.
@@ -54,6 +55,17 @@ func (c *SsmDataChannel) Open(cfg aws.Config, in *ssm.StartSessionInput) error {
 	go c.processOutboundQueue()
 
 	return c.startSession(cfg, in)
+}
+
+// OpenWithURL creates the web socket connection with the given URL and opens the data channel.
+func (c *SsmDataChannel) OpenWithURL(url, token string) error {
+	c.handshakeCh = make(chan bool, 1)
+	c.outMsgBuf = NewMessageBuffer(50)
+	c.inMsgBuf = NewMessageBuffer(50)
+
+	go c.processOutboundQueue()
+
+	return c.startSessionWithURL(url, token)
 }
 
 // Close shuts down the web socket connection with the AWS service. Type-specific actions (like sending
@@ -457,6 +469,21 @@ func (c *SsmDataChannel) startSession(cfg aws.Config, in *ssm.StartSessionInput)
 	}
 
 	if err = c.openDataChannel(*out.TokenValue); err != nil {
+		_ = c.Close()
+		return err
+	}
+
+	return nil
+}
+
+func (c *SsmDataChannel) startSessionWithURL(url, token string) error {
+	var err error
+	c.ws, _, err = websocket.DefaultDialer.Dial(url, http.Header{}) //nolint:bodyclose
+	if err != nil {
+		return err
+	}
+
+	if err = c.openDataChannel(token); err != nil {
 		_ = c.Close()
 		return err
 	}
